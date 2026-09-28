@@ -3,21 +3,28 @@ from enum import Enum
 
 
 class ConflictType(Enum):
-    AUTO_RESOLVABLE = "AUTO_RESOLVABLE"          # Critério claro atingido
-    MANUAL_MERGE_REQUIRED = "MANUAL_MERGE_REQUIRED" # Impasse (ex: múltiplos pedidos com item_relacionado)
+    NONE = "Sem Conflitos" # Critério claro atingido
+    MANUAL_MERGE_REQUIRED = "Intervenção Manual Necessária" # Impasse (ex: múltiplos pedidos com item_relacionado)
 
+@dataclass
+class ItemDetail:
+    id: int
+    pedido_id: int
+    quantidade: float
+    preco_unitario: float
+    preco_total: float
+    quantidade_entrada: float | None
 
 @dataclass
 class DependentRecord:
     table_name: str
-    record_id: str
-    foreign_key_column: str
+    record_id: int
+    fk_column: str
     details: str
-
 
 @dataclass
 class PedidoDiagnostic:
-    id: str
+    id: int
     numero_pedido: str
     filial: str
     item_pedido_count: int
@@ -25,14 +32,14 @@ class PedidoDiagnostic:
     has_item_relacionado_servico: bool
     total_dependencias: int
     dependencias: list[DependentRecord] = field(default_factory=list)
-
+    items: list[ItemDetail] = field(default_factory=list)
 
 @dataclass
 class DuplicateGroup:
     db_name: str
     numero_pedido: str
     filial: str
-    pedidos: list[PedidoDiagnostic]
-    canonical_id: str | None = None
-    conflict_type: ConflictType = ConflictType.AUTO_RESOLVABLE
+    pedidos: list[PedidoDiagnostic] = field(default_factory=list)
+    conflict_type: ConflictType = ConflictType.NONE
+    canonical_id: int | None = None
     reason: str = ""
