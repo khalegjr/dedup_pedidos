@@ -83,17 +83,31 @@ def start():
         log = dedup.execute_deduplication(group, canonical_id=canonical_id, dry_run=is_dry_run)
         execution_logs.append(log)
 
-    # Exibição do relatório em tela
-    ReportGenerator.render_execution_summary(execution_logs, skipped_groups)
+    # 1. Seleção do Formato do Relatório
+    report_format = Prompt.ask(
+        "\nEscolha a forma de exibição/saída do relatório",
+        choices=["tela", "csv", "pdf", "json"],
+        default="tela"
+    )
 
-    # Seleção de local de salvamento
-    if Confirm.ask("\nDeseja salvar o relatório detalhado em arquivo?"):
+    # 2. Renderização em tela se escolhido 'tela'
+    if report_format == "tela":
+        ReportGenerator.render_execution_summary(execution_logs, skipped_groups)
+
+    # 3. Se for diferente de 'tela', solicita o local e executa o exportador com extensão tratada
+    else:
         default_dir = str(Path.cwd().resolve())
         user_path = Prompt.ask(
-            "Informe o caminho/pasta para salvar (Padrão: raiz do projeto)",
+            "Informe a pasta e o nome do arquivo para salvar (Padrão: raiz do projeto)",
             default=default_dir
         )
-        ReportGenerator.export_json_report(execution_logs, skipped_groups, user_path)
+
+        if report_format == "csv":
+            ReportGenerator.export_csv(execution_logs, skipped_groups, user_path)
+        elif report_format == "json":
+            ReportGenerator.export_json(execution_logs, skipped_groups, user_path)
+        elif report_format == "pdf":
+            ReportGenerator.export_pdf(execution_logs, skipped_groups, user_path)
 
 if __name__ == "__main__":
     app()

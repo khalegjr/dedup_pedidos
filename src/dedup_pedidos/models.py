@@ -10,6 +10,7 @@ class ConflictType(Enum):
 class ItemDetail:
     id: int
     pedido_id: int
+    item: str
     quantidade: float
     preco_unitario: float
     preco_total: float

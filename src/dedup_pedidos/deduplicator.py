@@ -41,9 +41,9 @@ class TransactionalDeduplicator:
             with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 conn.autocommit = False
 
-                # Busca detalhada dos itens antes da remoção
+                # Busca detalhada incluindo a coluna 'item'
                 cursor.execute("""
-                    SELECT id, pedido_id, quantidade, preco_unitario, preco_total, quantidade_entrada
+                    SELECT id, pedido_id, item, quantidade, preco_unitario, preco_total, quantidade_entrada
                     FROM public.item_pedido
                     WHERE pedido_id IN %s;
                 """, (all_ids,))
@@ -53,6 +53,7 @@ class TransactionalDeduplicator:
                     item_dict = {
                         "id": item["id"],
                         "pedido_id": item["pedido_id"],
+                        "item": str(item["item"] or ""),
                         "quantidade": float(item["quantidade"] or 0),
                         "preco_unitario": float(item["preco_unitario"] or 0),
                         "preco_total": float(item["preco_total"] or 0),
