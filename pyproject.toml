@@ -1,12 +1,12 @@
 [project]
 name = "dedup-pedidos"
 version = "0.1.0"
-description = "Add your description here"
+description = "CLI de diagnóstico e deduplicação transacional de pedidos"
 readme = "README.md"
 authors = [
     { name = "Júnior Souza - Khaled", email = "junior.souza@ti9.com.br" }
 ]
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 dependencies = [
     "psycopg2-binary>=2.9.13",
     "pydantic-settings>=2.15.0",
@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.scripts]
-dedup-pedidos = "dedup_pedidos:main"
+dedup-app = "dedup_pedidos.main:app"
 
 [build-system]
 requires = ["uv_build>=0.12.19,<0.13.0"]

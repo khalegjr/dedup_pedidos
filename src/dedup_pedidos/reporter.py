@@ -1,6 +1,5 @@
 import csv
 
-from models import DuplicateGroup
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet
@@ -8,6 +7,8 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, TableStyle
 from reportlab.platypus import Table as PDFTable
 from rich.console import Console
 from rich.table import Table
+
+from .models import DuplicateGroup
 
 console = Console()
 
