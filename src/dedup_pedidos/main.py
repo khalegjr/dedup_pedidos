@@ -4,110 +4,97 @@ import typer
 from rich.console import Console
 from rich.prompt import Confirm, Prompt
 
-from .analyzer import DatabaseAnalyzer
-from .config import SERVER_CONFIG
-from .deduplicator import TransactionalDeduplicator
+from .config import DEFAULT_DB, SERVER_CONFIG
 from .reporter import ReportGenerator
+from .runner import ScriptRunner
 
-app = typer.Typer(help="CLI de Diagnóstico e Deduplicação Transacional de Pedidos")
+app = typer.Typer(help="CLI de Deduplicação via Script SQL")
 console = Console()
 
+
 @app.command()
-def start():
-    console.print("[bold blue]=== Gerenciador de Duplicidades PostgreSQL ===[/bold blue]\n")
+def start(script_path: str = "script/deduplicacao_pedidos.sql"):
+    console.print("[bold blue]=== Gerenciador de Deduplicação via Script SQL ===[/bold blue]\n")
 
-    analyzer = DatabaseAnalyzer(SERVER_CONFIG)
-    console.print("Buscando bases de dados disponíveis...")
-    all_dbs = analyzer.list_target_databases()
-
-    all_groups = []
-    for db in all_dbs:
-        groups = analyzer.diagnose_database(db)
-        if groups:
-            all_groups.extend(groups)
-
-    if not all_groups:
-        console.print("[bold green]Nenhuma duplicidade encontrada no servidor![/bold green]")
+    try:
+        runner = ScriptRunner(SERVER_CONFIG, script_path=script_path)
+    except Exception as e:
+        console.print(f"[bold red]Erro ao carregar o script SQL:[/bold red] {e}")
         return
+
+    console.print("Listando bases de dados disponíveis no servidor...")
+    databases = runner.list_target_databases(default_db=DEFAULT_DB)
+
+    if not databases:
+        console.print("[yellow]Nenhuma base de dados encontrada para processamento.[/yellow]")
+        return
+
+    console.print(f"Bases encontradas: [cyan]{', '.join(databases)}[/cyan]\n")
 
     mode = Prompt.ask(
         "Escolha o modo de execução",
-        choices=["auto_simulacao", "auto_efetivo", "manual", "sair"],
-        default="auto_simulacao"
+        choices=["simulacao", "efetivo", "sair"],
+        default="simulacao"
     )
 
     if mode == "sair":
         return
 
-    dedup = TransactionalDeduplicator(SERVER_CONFIG)
-    execution_logs = []
-    skipped_groups = []
+    is_simulation = (mode == "simulacao")
 
-    for group in all_groups:
-        canonical_id = group.canonical_id
-        is_manual_required = (group.conflict_type.name == "MANUAL_MERGE_REQUIRED")
+    if not is_simulation:
+        if not Confirm.ask("[bold red]ATENÇÃO: As alterações serão salvas permanentemente (COMMIT). Deseja continuar?[/bold red]"):
+            console.print("[yellow]Operação cancelada pelo usuário.[/yellow]")
+            return
 
-        if mode == "manual" or is_manual_required:
-            console.print(f"\n[yellow]Atenção: Pedido {group.numero_pedido} - Filial {group.filial} na base {group.db_name}[/yellow]")
-            for idx, p in enumerate(group.pedidos):
-                console.print(f"  [{idx + 1}] ID: {p.id} | Itens: {p.item_pedido_count} | Tem Relacionado: {p.has_item_relacionado}")
+    results = []
 
-            choices = [str(i + 1) for i in range(len(group.pedidos))] + ["pular"]
-            choice = Prompt.ask(
-                "Selecione o número do ID a MANTER ou digite 'pular'",
-                choices=choices,
-                default="pular"
-            )
+    console.print("\n[bold]Iniciando processamento das bases...[/bold]\n")
+    for db in databases:
+        console.print(f"Executando na base: [bold cyan]{db}[/bold cyan]...")
+        res = runner.execute_db_script(db, is_simulation=is_simulation)
 
-            if choice == "pular":
-                group.reason = "Ignorado pelo operador durante o fluxo manual."
-                skipped_groups.append(group)
-                console.print("[cyan]-> Grupo pulado.[/cyan]")
-                continue
-            else:
-                canonical_id = group.pedidos[int(choice) - 1].id
+        if res.get("skipped"):
+            console.print(f"  └─ [yellow]Ignorada:[/yellow] {res['error']}")
+        elif not res["success"]:
+            console.print(f"  └─ [bold red]ROLLBACK EFETUADO:[/bold red] {res['error']}")
+        else:
+            diff_status = "[bold white on red]DIVERGÊNCIAS DETECTADAS[/bold white on red]" if res["has_diff_alert"] else "[green]OK[/green]"
+            console.print(f"  └─ Concluído com sucesso ({'Simulação' if is_simulation else 'Efetivo'}) | Status: {diff_status}")
 
-        if not canonical_id:
-            group.reason = "Sem ID canônico definido."
-            skipped_groups.append(group)
-            continue
+        results.append(res)
 
-        is_dry_run = True if "simulacao" in mode else False
+    # Exibe imediatamente o resultado consolidado no console
+    ReportGenerator.render_console_summary(results)
 
-        if not is_dry_run:
-            if not Confirm.ask(f"[bold red]CONFIRMA A DELEÇÃO PERMANENTE na base {group.db_name}?[/bold red]"):
-                group.reason = "Operação de deleção cancelada pelo usuário."
-                skipped_groups.append(group)
-                continue
-
-        log = dedup.execute_deduplication(group, canonical_id=canonical_id, dry_run=is_dry_run)
-        execution_logs.append(log)
-
-    # 1. Seleção do Formato do Relatório
-    report_format = Prompt.ask(
-        "\nEscolha a forma de exibição/saída do relatório",
-        choices=["tela", "csv", "pdf", "json"],
-        default="tela"
-    )
-
-    # 2. Renderização em tela se escolhido 'tela'
-    if report_format == "tela":
-        ReportGenerator.render_execution_summary(execution_logs, skipped_groups)
-
-    # 3. Se for diferente de 'tela', solicita o local e executa o exportador com extensão tratada
-    else:
-        default_dir = str(Path.cwd().resolve())
-        user_path = Prompt.ask(
-            "Informe a pasta e o nome do arquivo para salvar (Padrão: raiz do projeto)",
-            default=default_dir
+    # Loop de seleção e exportação contínua de relatórios
+    while True:
+        report_choice = Prompt.ask(
+            "\nEscolha a opção de relatório",
+            choices=["tela", "csv", "pdf", "json", "finalizar"],
+            default="finalizar"
         )
 
-        if report_format == "csv":
-            ReportGenerator.export_csv(execution_logs, skipped_groups, user_path)
-        elif report_format == "json":
-            ReportGenerator.export_json(execution_logs, skipped_groups, user_path)
-        elif report_format == "pdf":
-            ReportGenerator.export_pdf(execution_logs, skipped_groups, user_path)
+        if report_choice == "finalizar":
+            console.print("[bold green]Aplicação finalizada com sucesso.[/bold green]")
+            break
+
+        if report_choice == "tela":
+            ReportGenerator.render_console_summary(results)
+        else:
+            default_dir = str(Path.cwd().resolve())
+            user_path = Prompt.ask(
+                "Informe o caminho/diretório para salvar o arquivo",
+                default=default_dir
+            )
+
+            if report_choice == "csv":
+                ReportGenerator.export_csv(results, user_path)
+            elif report_choice == "json":
+                ReportGenerator.export_json(results, user_path)
+            elif report_choice == "pdf":
+                ReportGenerator.export_pdf(results, user_path)
+
 
 if __name__ == "__main__":
     app()

@@ -7,132 +7,121 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from .models import DuplicateGroup
-
 console = Console()
+
 
 class ReportGenerator:
 
     @staticmethod
     def resolve_output_path(destination_path: str, format_extension: str) -> Path:
-        """Resolve o caminho no OS, cria diretórios e garante a extensão correta."""
         target = Path(destination_path).expanduser().resolve()
-
-        # Se for um diretório existente, insere nome de arquivo padrão
         if target.is_dir():
-            target = target / f"relatorio_alteracoes.{format_extension}"
+            target = target / f"relatorio_diff_dedup.{format_extension}"
         else:
-            # Força/corrige a extensão do arquivo conforme o formato escolhido
             if target.suffix.lower() != f".{format_extension}":
                 target = target.with_suffix(f".{format_extension}")
-
         target.parent.mkdir(parents=True, exist_ok=True)
         return target
 
     @classmethod
-    def render_execution_summary(cls, execution_logs: list[dict[str, Any]], skipped_groups: list[DuplicateGroup]):
-        console.print("\n[bold green]=== RELATÓRIO DE EXECUÇÃO E ALTERAÇÕES ===[/bold green]\n")
+    def render_console_summary(cls, execution_results: list[dict[str, Any]]):
+        console.print("\n[bold green]=== RESUMO GERAL DAS BASES PROCESSADAS ===[/bold green]\n")
 
-        if execution_logs:
-            for log in execution_logs:
-                title = f"Base: {log['database']} | Pedido: {log['numero_pedido']} | Filial: {log['filial']} (ID Mantido: {log['canonical_id']})"
-                console.print(Panel(f"[bold]{title}[/bold]\nStatus: {log['status']}"))
+        # Alerta inicial rápido sobre divergências encontradas
+        alert_dbs = [r["database"] for r in execution_results if r.get("has_diff_alert")]
+        if alert_dbs:
+            console.print(Panel(
+                "[bold white on red] ATENÇÃO: As seguintes bases possuem divergências no resumo (diff != 0): [/bold white on red]\n"
+                + ", ".join(alert_dbs),
+                title="[bold yellow]Divergências Detectadas[/bold yellow]"
+            ))
+        else:
+            console.print("[bold green]✔ Nenhuma divergência de registros ou quantidades foi encontrada nas bases elegíveis.[/bold green]\n")
 
-                table = Table(title="Comparativo de Itens (Mantidos vs Excluídos)", show_lines=True)
-                table.add_column("Status Item", style="cyan")
-                table.add_column("ID Item", style="bold")
-                table.add_column("ID Pedido Original")
-                table.add_column("Item", style="magenta")
-                table.add_column("Qtd")
-                table.add_column("Preço Unit.")
-                table.add_column("Preço Total")
-                table.add_column("Qtd Entrada")
+        for res in execution_results:
+            db_name = res["database"]
 
-                for item in log["kept_items"]:
-                    table.add_row(
-                        "[green]MANTIDO[/green]",
-                        str(item["id"]),
-                        str(item["pedido_id"]),
-                        item["item"],
-                        f"{item['quantidade']:.2f}",
-                        f"R$ {item['preco_unitario']:.2f}",
-                        f"R$ {item['preco_total']:.2f}",
-                        str(item['quantidade_entrada']) if item['quantidade_entrada'] is not None else "-"
-                    )
+            if res.get("skipped"):
+                console.print(f"[yellow]⚪ Base {db_name}: Ignorada/Ignorável ({res['error']})[/yellow]")
+                continue
 
-                for item in log["deleted_items"]:
-                    table.add_row(
-                        "[red]EXCLUÍDO[/red]",
-                        str(item["id"]),
-                        str(item["pedido_id"]),
-                        item["item"],
-                        f"{item['quantidade']:.2f}",
-                        f"R$ {item['preco_unitario']:.2f}",
-                        f"R$ {item['preco_total']:.2f}",
-                        str(item['quantidade_entrada']) if item['quantidade_entrada'] is not None else "-"
-                    )
+            if not res["success"]:
+                console.print(f"[bold red]❌ Base {db_name}: Efetivado ROLLBACK devido a erro![/bold red]")
+                console.print(f"   [red]Motivo: {res['error']}[/red]\n")
+                continue
 
-                console.print(table)
-                console.print("\n")
+            # Base executada com sucesso
+            has_alert = res.get("has_diff_alert", False)
+            status_tag = "[bold white on red] COM DIVERGÊNCIAS [/bold white on red]" if has_alert else "[bold green] SEM DIVERGÊNCIAS [/bold green]"
 
-        if skipped_groups:
-            console.print(Panel("[bold yellow]REGISTROS PULADOS / PENDENTES DE AÇÃO MANUAL[/bold yellow]"))
-            skip_table = Table(show_header=True, header_style="bold yellow", show_lines=True)
-            skip_table.add_column("Base de Dados")
-            skip_table.add_column("Nº Pedido")
-            skip_table.add_column("Filial")
-            skip_table.add_column("Qtd Pedidos Envolvidos")
-            skip_table.add_column("Motivo")
+            table = Table(
+                title=f"Base: {db_name} {status_tag}",
+                show_lines=True,
+                header_style="bold magenta"
+            )
+            table.add_column("Nº Pedido")
+            table.add_column("Item")
+            table.add_column("Reg. Antes", justify="right")
+            table.add_column("Reg. Depois", justify="right")
+            table.add_column("Diff Reg.", justify="right")
+            table.add_column("Qtd Antes", justify="right")
+            table.add_column("Qtd Depois", justify="right")
+            table.add_column("Diff Qtd", justify="right")
 
-            for group in skipped_groups:
-                skip_table.add_row(
-                    group.db_name,
-                    group.numero_pedido,
-                    group.filial,
-                    str(len(group.pedidos)),
-                    group.reason or "Ação manual ignorada pelo operador"
+            for r in res["diff_rows"]:
+                diff_reg = r["diff_registros"]
+                diff_qtd = r["diff_quantidade"]
+                is_divergent = (diff_reg != 0 or diff_qtd != 0)
+
+                # Estilo com fundo vermelho e texto branco para divergências
+                row_style = "bold white on red" if is_divergent else None
+
+                table.add_row(
+                    str(r["numero_pedido"]),
+                    str(r["item"]),
+                    str(r["registros_antes"]),
+                    str(r["registros_depois"]),
+                    str(diff_reg),
+                    f"{r['qtd_antes']:.2f}",
+                    f"{r['qtd_depois']:.2f}",
+                    f"{diff_qtd:.2f}",
+                    style=row_style
                 )
-            console.print(skip_table)
+
+            console.print(table)
+            console.print("\n")
 
     @classmethod
-    def export_csv(cls, execution_logs: list[dict[str, Any]], skipped_groups: list[DuplicateGroup], output_path: str):
+    def export_csv(cls, execution_results: list[dict[str, Any]], output_path: str):
         path = cls.resolve_output_path(output_path, "csv")
         with open(path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
-            writer.writerow(["TIPO_REGISTRO", "DATABASE", "NUMERO_PEDIDO", "FILIAL", "STATUS_ITEM", "ITEM_ID", "PEDIDO_ID_ORIGEM", "ITEM", "QUANTIDADE", "PRECO_UNITARIO", "PRECO_TOTAL", "QUANTIDADE_ENTRADA", "MOTIVO"])
-
-            for log in execution_logs:
-                for item in log["kept_items"]:
-                    writer.writerow(["EXECUCAO", log["database"], log["numero_pedido"], log["filial"], "MANTIDO", item["id"], item["pedido_id"], item["item"], item["quantidade"], item["preco_unitario"], item["preco_total"], item["quantidade_entrada"], ""])
-                for item in log["deleted_items"]:
-                    writer.writerow(["EXECUCAO", log["database"], log["numero_pedido"], log["filial"], "EXCLUIDO", item["id"], item["pedido_id"], item["item"], item["quantidade"], item["preco_unitario"], item["preco_total"], item["quantidade_entrada"], ""])
-
-            for g in skipped_groups:
-                writer.writerow(["PULADO", g.db_name, g.numero_pedido, g.filial, "-", "-", "-", "-", "-", "-", "-", "-", g.reason])
-
-        console.print(f"[bold green]Relatório CSV salvo em:[/bold green] {path}")
+            writer.writerow([
+                "DATABASE", "NUMERO_PEDIDO", "ITEM",
+                "REGISTROS_ANTES", "REGISTROS_DEPOIS", "DIFF_REGISTROS",
+                "QTD_ANTES", "QTD_DEPOIS", "DIFF_QUANTIDADE", "HAS_DIVERGENCE"
+            ])
+            for res in execution_results:
+                if res.get("success"):
+                    for r in res["diff_rows"]:
+                        has_div = (r["diff_registros"] != 0 or r["diff_quantidade"] != 0)
+                        writer.writerow([
+                            res["database"], r["numero_pedido"], r["item"],
+                            r["registros_antes"], r["registros_depois"], r["diff_registros"],
+                            r["qtd_antes"], r["qtd_depois"], r["diff_quantidade"],
+                            "SIM" if has_div else "NAO"
+                        ])
+        console.print(f"[bold green]Relatório CSV salvo com sucesso em:[/bold green] {path}")
 
     @classmethod
-    def export_json(cls, execution_logs: list[dict[str, Any]], skipped_groups: list[DuplicateGroup], output_path: str):
+    def export_json(cls, execution_results: list[dict[str, Any]], output_path: str):
         path = cls.resolve_output_path(output_path, "json")
-        payload = {
-            "executed_operations": execution_logs,
-            "skipped_operations": [
-                {
-                    "database": g.db_name,
-                    "numero_pedido": g.numero_pedido,
-                    "filial": g.filial,
-                    "reason": g.reason
-                } for g in skipped_groups
-            ]
-        }
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2, ensure_ascii=False)
-
-        console.print(f"[bold green]Relatório JSON salvo em:[/bold green] {path}")
+            json.dump(execution_results, f, indent=2, ensure_ascii=False)
+        console.print(f"[bold green]Relatório JSON salvo com sucesso em:[/bold green] {path}")
 
     @classmethod
-    def export_pdf(cls, execution_logs: list[dict[str, Any]], skipped_groups: list[DuplicateGroup], output_path: str):
+    def export_pdf(cls, execution_results: list[dict[str, Any]], output_path: str):
         path = cls.resolve_output_path(output_path, "pdf")
         try:
             from reportlab.lib import colors
@@ -146,31 +135,42 @@ class ReportGenerator:
             )
             from reportlab.platypus import Table as RLTable
         except ImportError:
-            console.print("[bold red]Erro: A biblioteca 'reportlab' é necessária para gerar PDFs. Execute 'uv add reportlab'.[/bold red]")
+            console.print("[bold red]Erro: A biblioteca 'reportlab' é necessária para PDF. Execute 'uv add reportlab'.[/bold red]")
             return
 
         doc = SimpleDocTemplate(str(path), pagesize=letter)
         styles = getSampleStyleSheet()
-        story = [Paragraph("Relatório de Exclusão e Comparativo de Itens", styles['Title']), Spacer(1, 12)]
+        story = [Paragraph("Relatório Resumo de Divergências de Deduplicação", styles['Title']), Spacer(1, 12)]
 
-        for log in execution_logs:
-            story.append(Paragraph(f"Base: {log['database']} | Pedido: {log['numero_pedido']} | Filial: {log['filial']}", styles['Heading2']))
-            data = [["Status", "ID Item", "ID Pedido", "Item", "Qtd", "Preço Unit.", "Preço Total", "Qtd Ent."]]
+        for res in execution_results:
+            if not res.get("success"):
+                continue
 
-            for item in log["kept_items"]:
-                data.append(["MANTIDO", str(item["id"]), str(item["pedido_id"]), item["item"], f"{item['quantidade']:.2f}", f"R$ {item['preco_unitario']:.2f}", f"R$ {item['preco_total']:.2f}", str(item['quantidade_entrada'] or "-")])
-            for item in log["deleted_items"]:
-                data.append(["EXCLUIDO", str(item["id"]), str(item["pedido_id"]), item["item"], f"{item['quantidade']:.2f}", f"R$ {item['preco_unitario']:.2f}", f"R$ {item['preco_total']:.2f}", str(item['quantidade_entrada'] or "-")])
+            story.append(Paragraph(f"Base de Dados: {res['database']}", styles['Heading2']))
+            data = [["Nº Pedido", "Item", "Reg. Antes", "Reg. Dep.", "Diff Reg.", "Qtd Antes", "Qtd Dep.", "Diff Qtd"]]
 
-            t = RLTable(data)
-            t.setStyle(TableStyle([
+            table_styles = [
                 ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
                 ('FONTSIZE', (0, 0), (-1, -1), 8)
-            ]))
+            ]
+
+            for row_idx, r in enumerate(res["diff_rows"], start=1):
+                is_divergent = (r["diff_registros"] != 0 or r["diff_quantidade"] != 0)
+                data.append([
+                    str(r["numero_pedido"]), str(r["item"]),
+                    str(r["registros_antes"]), str(r["registros_depois"]), str(r["diff_registros"]),
+                    f"{r['qtd_antes']:.2f}", f"{r['qtd_depois']:.2f}", f"{r['diff_quantidade']:.2f}"
+                ])
+                if is_divergent:
+                    table_styles.append(('BACKGROUND', (0, row_idx), (-1, row_idx), colors.red))
+                    table_styles.append(('TEXTCOLOR', (0, row_idx), (-1, row_idx), colors.white))
+
+            t = RLTable(data)
+            t.setStyle(TableStyle(table_styles))
             story.append(t)
             story.append(Spacer(1, 12))
 
         doc.build(story)
-        console.print(f"[bold green]Relatório PDF salvo em:[/bold green] {path}")
+        console.print(f"[bold green]Relatório PDF salvo com sucesso em:[/bold green] {path}")
