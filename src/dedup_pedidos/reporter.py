@@ -27,35 +27,43 @@ class ReportGenerator:
     def render_console_summary(cls, execution_results: list[dict[str, Any]]):
         console.print("\n[bold green]=== RESUMO GERAL DAS BASES PROCESSADAS ===[/bold green]\n")
 
-        # Alerta inicial rápido sobre divergências encontradas
-        alert_dbs = [r["database"] for r in execution_results if r.get("has_diff_alert")]
-        if alert_dbs:
+        # Alerta inicial compacto
+        dbs_com_div = [
+            f"{r['database']} ({r.get('divergent_count', 0)} registros)"
+            for r in execution_results if r.get("divergent_count", 0) > 0
+        ]
+
+        if dbs_com_div:
             console.print(Panel(
-                "[bold white on red] ATENÇÃO: As seguintes bases possuem divergências no resumo (diff != 0): [/bold white on red]\n"
-                + ", ".join(alert_dbs),
+                "[bold white on red] ATENÇÃO: As seguintes bases possuem divergências no resumo: [/bold white on red]\n"
+                + "\n".join(f"• {db}" for db in dbs_com_div),
                 title="[bold yellow]Divergências Detectadas[/bold yellow]"
             ))
         else:
-            console.print("[bold green]✔ Nenhuma divergência de registros ou quantidades foi encontrada nas bases elegíveis.[/bold green]\n")
+            console.print("[bold green]✔ Nenhuma divergência de registros ou quantidades foi encontrada nas bases executadas.[/bold green]\n")
 
-        for res in execution_results:
+        for idx, res in enumerate(execution_results, start=1):
             db_name = res["database"]
 
             if res.get("skipped"):
-                console.print(f"[yellow]⚪ Base {db_name}: Ignorada/Ignorável ({res['error']})[/yellow]")
+                console.print(f"[yellow][{idx}] Base de Dados: {db_name} [Ignorada: {res['error']}][/yellow]")
                 continue
 
             if not res["success"]:
-                console.print(f"[bold red]❌ Base {db_name}: Efetivado ROLLBACK devido a erro![/bold red]")
-                console.print(f"   [red]Motivo: {res['error']}[/red]\n")
+                console.print(f"[bold red][{idx}] Base de Dados: {db_name} [ROLLBACK - Erro: {res['error']}][/bold red]\n")
                 continue
 
-            # Base executada com sucesso
-            has_alert = res.get("has_diff_alert", False)
-            status_tag = "[bold white on red] COM DIVERGÊNCIAS [/bold white on red]" if has_alert else "[bold green] SEM DIVERGÊNCIAS [/bold green]"
+            # Quantidade de divergências no banco
+            div_count = res.get("divergent_count", 0)
+            if div_count > 0:
+                tag_status = f"[bold white on red][{div_count} registro{'s' if div_count > 1 else ''} com divergência{'s' if div_count > 1 else ''}][/bold white on red]"
+            else:
+                tag_status = "[bold green][sem registros com divergências][/bold green]"
+
+            title_text = f"[{idx}] Base de Dados: {db_name} {tag_status}"
 
             table = Table(
-                title=f"Base: {db_name} {status_tag}",
+                title=title_text,
                 show_lines=True,
                 header_style="bold magenta"
             )
@@ -73,7 +81,6 @@ class ReportGenerator:
                 diff_qtd = r["diff_quantidade"]
                 is_divergent = (diff_reg != 0 or diff_qtd != 0)
 
-                # Estilo com fundo vermelho e texto branco para divergências
                 row_style = "bold white on red" if is_divergent else None
 
                 table.add_row(
@@ -97,28 +104,44 @@ class ReportGenerator:
         with open(path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow([
-                "DATABASE", "NUMERO_PEDIDO", "ITEM",
+                "INDICE_BASE", "DATABASE", "STATUS_DIVERGENCIA", "NUMERO_PEDIDO", "ITEM",
                 "REGISTROS_ANTES", "REGISTROS_DEPOIS", "DIFF_REGISTROS",
-                "QTD_ANTES", "QTD_DEPOIS", "DIFF_QUANTIDADE", "HAS_DIVERGENCE"
+                "QTD_ANTES", "QTD_DEPOIS", "DIFF_QUANTIDADE"
             ])
-            for res in execution_results:
+            for idx, res in enumerate(execution_results, start=1):
                 if res.get("success"):
+                    div_count = res.get("divergent_count", 0)
+                    status_str = f"{div_count} registros com divergência" if div_count > 0 else "sem registros com divergências"
+
                     for r in res["diff_rows"]:
-                        has_div = (r["diff_registros"] != 0 or r["diff_quantidade"] != 0)
                         writer.writerow([
-                            res["database"], r["numero_pedido"], r["item"],
+                            idx, res["database"], status_str, r["numero_pedido"], r["item"],
                             r["registros_antes"], r["registros_depois"], r["diff_registros"],
-                            r["qtd_antes"], r["qtd_depois"], r["diff_quantidade"],
-                            "SIM" if has_div else "NAO"
+                            r["qtd_antes"], r["qtd_depois"], r["diff_quantidade"]
                         ])
-        console.print(f"[bold green]Relatório CSV salvo com sucesso em:[/bold green] {path}")
+        console.print(f"[bold green]Relatório CSV salvo em:[/bold green] {path}")
 
     @classmethod
     def export_json(cls, execution_results: list[dict[str, Any]], output_path: str):
         path = cls.resolve_output_path(output_path, "json")
+        payload = []
+        for idx, res in enumerate(execution_results, start=1):
+            div_count = res.get("divergent_count", 0)
+            item = {
+                "index": idx,
+                "database": res["database"],
+                "divergent_count": div_count,
+                "status_label": f"{div_count} registros com divergência" if div_count > 0 else "sem registros com divergências",
+                "success": res.get("success", False),
+                "skipped": res.get("skipped", False),
+                "error": res.get("error"),
+                "diff_rows": res.get("diff_rows", [])
+            }
+            payload.append(item)
+
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(execution_results, f, indent=2, ensure_ascii=False)
-        console.print(f"[bold green]Relatório JSON salvo com sucesso em:[/bold green] {path}")
+            json.dump(payload, f, indent=2, ensure_ascii=False)
+        console.print(f"[bold green]Relatório JSON salvo em:[/bold green] {path}")
 
     @classmethod
     def export_pdf(cls, execution_results: list[dict[str, Any]], output_path: str):
@@ -135,18 +158,21 @@ class ReportGenerator:
             )
             from reportlab.platypus import Table as RLTable
         except ImportError:
-            console.print("[bold red]Erro: A biblioteca 'reportlab' é necessária para PDF. Execute 'uv add reportlab'.[/bold red]")
+            console.print("[bold red]Erro: Biblioteca 'reportlab' ausente. Execute 'uv add reportlab'.[/bold red]")
             return
 
         doc = SimpleDocTemplate(str(path), pagesize=letter)
         styles = getSampleStyleSheet()
         story = [Paragraph("Relatório Resumo de Divergências de Deduplicação", styles['Title']), Spacer(1, 12)]
 
-        for res in execution_results:
+        for idx, res in enumerate(execution_results, start=1):
             if not res.get("success"):
                 continue
 
-            story.append(Paragraph(f"Base de Dados: {res['database']}", styles['Heading2']))
+            div_count = res.get("divergent_count", 0)
+            status_txt = f"[{div_count} registros com divergência]" if div_count > 0 else "[sem registros com divergências]"
+
+            story.append(Paragraph(f"[{idx}] Base de Dados: {res['database']} {status_txt}", styles['Heading2']))
             data = [["Nº Pedido", "Item", "Reg. Antes", "Reg. Dep.", "Diff Reg.", "Qtd Antes", "Qtd Dep.", "Diff Qtd"]]
 
             table_styles = [
@@ -173,4 +199,4 @@ class ReportGenerator:
             story.append(Spacer(1, 12))
 
         doc.build(story)
-        console.print(f"[bold green]Relatório PDF salvo com sucesso em:[/bold green] {path}")
+        console.print(f"[bold green]Relatório PDF salvo em:[/bold green] {path}")
