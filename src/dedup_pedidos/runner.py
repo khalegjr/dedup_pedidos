@@ -18,11 +18,13 @@ class ScriptRunner:
 
         sql = self.script_path.read_text(encoding="utf-8")
 
-        # Remove comandos de transação explícitos do script
+        # Mantém todo o conteúdo do script SQL original
+        # Remove apenas comandos finais explícitos se existirem no arquivo,
+        # pois o Python controlará o encerramento da transação.
         sql_lines = []
         for line in sql.splitlines():
             stripped = line.strip().upper()
-            if stripped in ("BEGIN;", "COMMIT;", "ROLLBACK;"):
+            if stripped in ("COMMIT;", "ROLLBACK;"):
                 continue
             sql_lines.append(line)
 
@@ -57,7 +59,7 @@ class ScriptRunner:
             return cursor.fetchone() is not None
 
     def execute_db_script(self, db_name: str, is_simulation: bool) -> dict[str, Any]:
-        """Executa a checagem rápida e, se houver duplicatas, executa a rotina SQL em uma base específica."""
+        """Executa a checagem rápida e, se houver duplicatas, roda a rotina SQL."""
         result = {
             "database": db_name,
             "success": False,
@@ -75,20 +77,20 @@ class ScriptRunner:
             return result
 
         try:
+            # Configura a conexão em autocommit para permitir que o script gerencie a transação
+            conn.autocommit = True
+
             # 1. Checagem prévia de existência da tabela e duplicatas
             if not self.check_has_duplicates(conn):
                 result["skipped"] = True
                 result["error"] = "Nenhuma duplicidade encontrada (numero_pedido, filial)."
                 return result
 
-            # 2. Execução da rotina completa apenas se houver duplicatas
+            # 2. Execução do script SQL
             with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-                conn.autocommit = False  # Inicia bloco transacional nativo
-
-                # Executa o script SQL de deduplicação
                 cursor.execute(self._raw_sql)
 
-                # Coleta os dados do relatório DIFF
+                # Coleta os dados do relatório DIFF gerados na tabela temporária
                 cursor.execute("SELECT * FROM relatorio_diff_tmp ORDER BY numero_pedido, item;")
                 rows = cursor.fetchall()
 
@@ -100,19 +102,31 @@ class ScriptRunner:
                     formatted_rows.append(r_dict)
 
                 result["diff_rows"] = formatted_rows
+
+                # Controle manual da transação iniciada pelo BEGIN do script SQL
+                if is_simulation:
+                    cursor.execute("ROLLBACK;")
+                else:
+                    cursor.execute("COMMIT;")
+
                 result["success"] = True
 
-                if is_simulation:
-                    conn.rollback()
-                else:
-                    conn.commit()
-
         except (errors.UndefinedTable, errors.UndefinedObject):
-            conn.rollback() if not conn.closed and not conn.autocommit else None
+            if not conn.closed:
+                try:
+                    with conn.cursor() as cursor:
+                        cursor.execute("ROLLBACK;")
+                except Exception:
+                    pass
             result["skipped"] = True
             result["error"] = "Tabelas necessárias (ex: public.pedido) não existem nesta base."
         except Exception as e:
-            conn.rollback() if not conn.closed and not conn.autocommit else None
+            if not conn.closed:
+                try:
+                    with conn.cursor() as cursor:
+                        cursor.execute("ROLLBACK;")
+                except Exception:
+                    pass
             result["skipped"] = False
             result["error"] = str(e)
         finally:
