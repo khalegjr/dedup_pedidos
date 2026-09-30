@@ -95,13 +95,17 @@ class ScriptRunner:
                 rows = cursor.fetchall()
 
                 formatted_rows = []
+                divergent_count = 0
+
                 for row in rows:
                     r_dict = dict(row)
                     if r_dict.get("diff_registros", 0) != 0 or r_dict.get("diff_quantidade", 0) != 0:
+                        divergent_count += 1
                         result["has_diff_alert"] = True
                     formatted_rows.append(r_dict)
 
                 result["diff_rows"] = formatted_rows
+                result["divergent_count"] = divergent_count
 
                 # Controle manual da transação iniciada pelo BEGIN do script SQL
                 if is_simulation:

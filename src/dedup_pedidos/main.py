@@ -1,6 +1,10 @@
 from pathlib import Path
 
 import typer
+
+# Importações do prompt_toolkit para autocompletar e lidar com terminal
+from prompt_toolkit import prompt
+from prompt_toolkit.completion import PathCompleter
 from rich.console import Console
 from rich.prompt import Confirm, Prompt
 
@@ -11,6 +15,23 @@ from .runner import ScriptRunner
 app = typer.Typer(help="CLI de Deduplicação via Script SQL")
 console = Console()
 
+
+def ask_file_path(default_path: str) -> str:
+    """Solicita o caminho utilizando prompt_toolkit com autocompletar (Tab)
+    e tratamento adequado de caracteres/backspace."""
+    completer = PathCompleter(expanduser=True)
+    console.print("[bold cyan]Digite o caminho onde deseja salvar (Pressione TAB para autocompletar):[/bold cyan]")
+
+    try:
+        user_input = prompt(
+            "Caminho: ",
+            default=default_path,
+            completer=completer,
+            complete_while_typing=True
+        )
+        return user_input.strip()
+    except (KeyboardInterrupt, EOFError):
+        return default_path
 
 @app.command()
 def start(script_path: str = "script/deduplicacao_pedidos.sql"):
@@ -64,10 +85,10 @@ def start(script_path: str = "script/deduplicacao_pedidos.sql"):
 
         results.append(res)
 
-    # Exibe imediatamente o resultado consolidado no console
+    # Exibe o resumo no console
     ReportGenerator.render_console_summary(results)
 
-    # Loop de seleção e exportação contínua de relatórios
+    # Loop de seleção e exportação de relatórios
     while True:
         report_choice = Prompt.ask(
             "\nEscolha a opção de relatório",
@@ -82,11 +103,8 @@ def start(script_path: str = "script/deduplicacao_pedidos.sql"):
         if report_choice == "tela":
             ReportGenerator.render_console_summary(results)
         else:
-            default_dir = str(Path.cwd().resolve())
-            user_path = Prompt.ask(
-                "Informe o caminho/diretório para salvar o arquivo",
-                default=default_dir
-            )
+            default_dir = str(Path.cwd().resolve()) + "/"
+            user_path = ask_file_path(default_dir)
 
             if report_choice == "csv":
                 ReportGenerator.export_csv(results, user_path)
@@ -94,7 +112,6 @@ def start(script_path: str = "script/deduplicacao_pedidos.sql"):
                 ReportGenerator.export_json(results, user_path)
             elif report_choice == "pdf":
                 ReportGenerator.export_pdf(results, user_path)
-
 
 if __name__ == "__main__":
     app()
