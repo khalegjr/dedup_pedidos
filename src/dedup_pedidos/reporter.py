@@ -1,5 +1,4 @@
 import csv
-import json
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +25,7 @@ class ReportGenerator:
     def render_console_summary(cls, execution_results: list[dict[str, Any]]):
         console.print("\n[bold green]=== RESUMO GERAL DAS BASES PROCESSADAS ===[/bold green]\n")
 
-        # 1. TABELA ÍNDICE GERAL DE TODAS AS BASES NO INÍCIO
+        # 1. ÍNDICE GERAL DE BASES
         index_table = Table(
             title="📋 ÍNDICE GERAL DE BASES DE DADOS",
             show_lines=True,
@@ -55,7 +54,7 @@ class ReportGenerator:
         console.print(index_table)
         console.print("\n" + "="*80 + "\n")
 
-        # 2. DETALHAMENTO DAS BASES EXECUTADAS COM SUCESSO
+        # 2. DETALHAMENTO DAS BASES EXECUTADAS
         for idx, res in enumerate(execution_results, start=1):
             db_name = res["database"]
 
@@ -76,6 +75,7 @@ class ReportGenerator:
                 header_style="bold magenta"
             )
             table.add_column("Nº Pedido")
+            table.add_column("Filial")
             table.add_column("Item")
             table.add_column("Reg. Antes", justify="right")
             table.add_column("Reg. Depois", justify="right")
@@ -93,6 +93,7 @@ class ReportGenerator:
 
                 table.add_row(
                     str(r["numero_pedido"]),
+                    str(r.get("filial", "")),
                     str(r["item"]),
                     str(r["registros_antes"]),
                     str(r["registros_depois"]),
@@ -111,48 +112,36 @@ class ReportGenerator:
         path = cls.resolve_output_path(output_path, "csv")
         with open(path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
+            # Adicionado FILIAL logo após NUMERO_PEDIDO
             writer.writerow([
-                "INDICE_BASE", "DATABASE", "STATUS_GERAL", "MOTIVO_PULADO_OU_ERRO",
-                "NUMERO_PEDIDO", "ITEM", "REGISTROS_ANTES", "REGISTROS_DEPOIS",
-                "DIFF_REGISTROS", "QTD_ANTES", "QTD_DEPOIS", "DIFF_QUANTIDADE"
+                "BASE", "STATUS", "NUMERO_PEDIDO", "FILIAL", "ITEM",
+                "REGISTROS_ANTES", "REGISTROS_DEPOIS", "DIFF_REGISTROS",
+                "QTD_ANTES", "QTD_DEPOIS", "DIFF_QUANTIDADE"
             ])
-            for idx, res in enumerate(execution_results, start=1):
-                if res.get("skipped"):
-                    writer.writerow([idx, res["database"], "PULADA", res.get("error", ""), "", "", "", "", "", "", "", ""])
-                elif not res.get("success"):
-                    writer.writerow([idx, res["database"], "ROLLBACK/ERRO", res.get("error", ""), "", "", "", "", "", "", "", ""])
-                else:
-                    div_count = res.get("divergent_count", 0)
-                    status_str = f"COM DIVERGENCIA ({div_count})" if div_count > 0 else "SEM DIVERGENCIA"
-                    for r in res["diff_rows"]:
-                        writer.writerow([
-                            idx, res["database"], status_str, "", r["numero_pedido"], r["item"],
-                            r["registros_antes"], r["registros_depois"], r["diff_registros"],
-                            r["qtd_antes"], r["qtd_depois"], r["diff_quantidade"]
-                        ])
-        console.print(f"[bold green]Relatório CSV salvo em:[/bold green] {path}")
 
-    @classmethod
-    def export_json(cls, execution_results: list[dict[str, Any]], output_path: str):
-        path = cls.resolve_output_path(output_path, "json")
-        payload = []
-        for idx, res in enumerate(execution_results, start=1):
-            div_count = res.get("divergent_count", 0)
-            item = {
-                "index": idx,
-                "database": res["database"],
-                "skipped": res.get("skipped", False),
-                "success": res.get("success", False),
-                "error_reason": res.get("error"),
-                "divergent_count": div_count,
-                "status_label": "PULADA" if res.get("skipped") else ("ROLLBACK" if not res.get("success") else (f"{div_count} divergências" if div_count > 0 else "sem divergências")),
-                "diff_rows": res.get("diff_rows", [])
-            }
-            payload.append(item)
+            for res in execution_results:
+                if res.get("skipped") or not res.get("success"):
+                    continue
 
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2, ensure_ascii=False)
-        console.print(f"[bold green]Relatório JSON salvo em:[/bold green] {path}")
+                for r in res.get("diff_rows", []):
+                    is_divergent = (r["diff_registros"] != 0 or r["diff_quantidade"] != 0)
+                    status_registro = "com divergência" if is_divergent else "sem divergência"
+
+                    writer.writerow([
+                        res["database"],
+                        status_registro,
+                        r["numero_pedido"],
+                        r.get("filial", ""),
+                        r["item"],
+                        r["registros_antes"],
+                        r["registros_depois"],
+                        r["diff_registros"],
+                        r["qtd_antes"],
+                        r["qtd_depois"],
+                        r["diff_quantidade"]
+                    ])
+
+        console.print(f"[bold green]Relatório CSV salvo com sucesso em:[/bold green] {path}")
 
     @classmethod
     def export_pdf(cls, execution_results: list[dict[str, Any]], output_path: str):
@@ -176,7 +165,7 @@ class ReportGenerator:
         styles = getSampleStyleSheet()
         story = [Paragraph("Relatório Resumo de Deduplicação de Pedidos", styles['Title']), Spacer(1, 12)]
 
-        # 1. ÍNDICE NO PDF
+        # ÍNDICE NO PDF
         story.append(Paragraph("Índice Geral de Bases de Dados", styles['Heading2']))
         idx_data = [["Índice", "Base de Dados", "Status / Motivo"]]
 
@@ -201,7 +190,7 @@ class ReportGenerator:
         story.append(idx_table)
         story.append(Spacer(1, 18))
 
-        # 2. DETALHAMENTO NO PDF
+        # DETALHAMENTO NO PDF COM COLUNA FILIAL
         for idx, res in enumerate(execution_results, start=1):
             if not res.get("success") or res.get("skipped"):
                 continue
@@ -210,7 +199,7 @@ class ReportGenerator:
             status_txt = f"[{div_count} registros com divergência]" if div_count > 0 else "[sem registros com divergências]"
 
             story.append(Paragraph(f"[{idx}] Base de Dados: {res['database']} {status_txt}", styles['Heading2']))
-            data = [["Nº Pedido", "Item", "Reg. Antes", "Reg. Dep.", "Diff Reg.", "Qtd Antes", "Qtd Dep.", "Diff Qtd"]]
+            data = [["Nº Pedido", "Filial", "Item", "Reg. Antes", "Reg. Dep.", "Diff Reg.", "Qtd Antes", "Qtd Dep.", "Diff Qtd"]]
 
             table_styles = [
                 ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
@@ -222,7 +211,7 @@ class ReportGenerator:
             for row_idx, r in enumerate(res["diff_rows"], start=1):
                 is_divergent = (r["diff_registros"] != 0 or r["diff_quantidade"] != 0)
                 data.append([
-                    str(r["numero_pedido"]), str(r["item"]),
+                    str(r["numero_pedido"]), str(r.get("filial", "")), str(r["item"]),
                     str(r["registros_antes"]), str(r["registros_depois"]), str(r["diff_registros"]),
                     f"{r['qtd_antes']:.2f}", f"{r['qtd_depois']:.2f}", f"{r['diff_quantidade']:.2f}"
                 ])

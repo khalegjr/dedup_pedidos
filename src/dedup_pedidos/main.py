@@ -97,7 +97,7 @@ def start(script_path: str = "script/deduplicacao_pedidos.sql"):
     while True:
         report_choice = Prompt.ask(
             "\nEscolha a opção de relatório",
-            choices=["tela", "csv", "pdf", "json", "finalizar"],
+            choices=["tela", "csv", "pdf", "finalizar"],
             default="finalizar"
         )
 
@@ -113,8 +113,6 @@ def start(script_path: str = "script/deduplicacao_pedidos.sql"):
 
             if report_choice == "csv":
                 ReportGenerator.export_csv(results, user_path)
-            elif report_choice == "json":
-                ReportGenerator.export_json(results, user_path)
             elif report_choice == "pdf":
                 ReportGenerator.export_pdf(results, user_path)
 
