@@ -17,7 +17,7 @@ CLI interativa para diagnóstico, simulação e deduplicação transacional de p
 ### 1. Clonar o Repositório
 
 ```bash
-git clone [https://github.com/seu-usuario/dedup-pedidos.git](https://github.com/seu-usuario/dedup-pedidos.git)
+git clone [https://github.com/khalegjr/dedup-pedidos.git](https://github.com/khalegjr/dedup-pedidos.git)
 cd dedup-pedidos
 ```
 
@@ -39,9 +39,6 @@ Linux / macOS (Terminal):
 ```bash
 export DB_HOST="localhost"
 export DB_PORT="5432"
-export DB_USER="postgres"
-export DB_PASSWORD="sua_senha_aqui"
-export DEFAULT_DB="postgres"
 export DB_USER="postgres"
 export DB_PASSWORD="sua_senha_aqui"
 export DEFAULT_DB="postgres"
@@ -67,7 +64,15 @@ set DB_PASSWORD=sua_senha_aqui
 set DEFAULT_DB=postgres
 ```
 
-🚀 Como Executar a Aplicação
+**Hierarquia de Precedência:**
+Mais alta: `export DB_HOST="192.168.1.50"` (Variável enviada explicitamente via shell/terminal).
+
+Média:`DB_HOST=10.0.0.1` (Definida dentro do arquivo .env).
+
+Mais baixa (Fallback): `"localhost"` (Valor padrão definido no segundo argumento do os.getenv).
+
+### 🚀 Como Executar a Aplicação
+
 Para iniciar o assistente interativo da CLI, execute:
 
 ```Bash
@@ -98,8 +103,6 @@ tela: Exibe as tabelas formatadas diretamente no terminal.
 csv: Exporta o comparativo em formato CSV.
 
 pdf: Gera um arquivo PDF formatado com o detalhamento dos itens.
-
-json: Salva a auditoria completa em estrutura JSON.
 
 Local de salvamento: Você pode aceitar o diretório padrão (raiz do projeto) ou digitar qualquer caminho customizado (ex: /home/user/documentos ou C:\Relatorios). A aplicação adicionará e formatará a extensão do arquivo automaticamente.
 
