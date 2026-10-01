@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import Any
 
 from rich.console import Console
-from rich.panel import Panel
 from rich.table import Table
 
 console = Console()
@@ -27,33 +26,42 @@ class ReportGenerator:
     def render_console_summary(cls, execution_results: list[dict[str, Any]]):
         console.print("\n[bold green]=== RESUMO GERAL DAS BASES PROCESSADAS ===[/bold green]\n")
 
-        # Alerta inicial compacto
-        dbs_com_div = [
-            f"{r['database']} ({r.get('divergent_count', 0)} registros)"
-            for r in execution_results if r.get("divergent_count", 0) > 0
-        ]
-
-        if dbs_com_div:
-            console.print(Panel(
-                "[bold white on red] ATENÇÃO: As seguintes bases possuem divergências no resumo: [/bold white on red]\n"
-                + "\n".join(f"• {db}" for db in dbs_com_div),
-                title="[bold yellow]Divergências Detectadas[/bold yellow]"
-            ))
-        else:
-            console.print("[bold green]✔ Nenhuma divergência de registros ou quantidades foi encontrada nas bases executadas.[/bold green]\n")
+        # 1. TABELA ÍNDICE GERAL DE TODAS AS BASES NO INÍCIO
+        index_table = Table(
+            title="📋 ÍNDICE GERAL DE BASES DE DADOS",
+            show_lines=True,
+            header_style="bold cyan"
+        )
+        index_table.add_column("Índice", justify="center", style="bold")
+        index_table.add_column("Base de Dados", style="bold")
+        index_table.add_column("Status / Resultado", justify="left")
 
         for idx, res in enumerate(execution_results, start=1):
             db_name = res["database"]
 
             if res.get("skipped"):
-                console.print(f"[yellow][{idx}] Base de Dados: {db_name} [Ignorada: {res['error']}][/yellow]")
+                status_str = f"[yellow]PULADA: {res['error']}[/yellow]"
+            elif not res.get("success"):
+                status_str = f"[bold red]ROLLBACK: {res['error']}[/bold red]"
+            else:
+                div_count = res.get("divergent_count", 0)
+                if div_count > 0:
+                    status_str = f"[bold white on red] COM DIVERGÊNCIAS ({div_count} registro{'s' if div_count > 1 else ''}) [/bold white on red]"
+                else:
+                    status_str = "[bold green]✔ SEM DIVERGÊNCIAS[/bold green]"
+
+            index_table.add_row(str(idx), db_name, status_str)
+
+        console.print(index_table)
+        console.print("\n" + "="*80 + "\n")
+
+        # 2. DETALHAMENTO DAS BASES EXECUTADAS COM SUCESSO
+        for idx, res in enumerate(execution_results, start=1):
+            db_name = res["database"]
+
+            if res.get("skipped") or not res.get("success"):
                 continue
 
-            if not res["success"]:
-                console.print(f"[bold red][{idx}] Base de Dados: {db_name} [ROLLBACK - Erro: {res['error']}][/bold red]\n")
-                continue
-
-            # Quantidade de divergências no banco
             div_count = res.get("divergent_count", 0)
             if div_count > 0:
                 tag_status = f"[bold white on red][{div_count} registro{'s' if div_count > 1 else ''} com divergência{'s' if div_count > 1 else ''}][/bold white on red]"
@@ -104,18 +112,21 @@ class ReportGenerator:
         with open(path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow([
-                "INDICE_BASE", "DATABASE", "STATUS_DIVERGENCIA", "NUMERO_PEDIDO", "ITEM",
-                "REGISTROS_ANTES", "REGISTROS_DEPOIS", "DIFF_REGISTROS",
-                "QTD_ANTES", "QTD_DEPOIS", "DIFF_QUANTIDADE"
+                "INDICE_BASE", "DATABASE", "STATUS_GERAL", "MOTIVO_PULADO_OU_ERRO",
+                "NUMERO_PEDIDO", "ITEM", "REGISTROS_ANTES", "REGISTROS_DEPOIS",
+                "DIFF_REGISTROS", "QTD_ANTES", "QTD_DEPOIS", "DIFF_QUANTIDADE"
             ])
             for idx, res in enumerate(execution_results, start=1):
-                if res.get("success"):
+                if res.get("skipped"):
+                    writer.writerow([idx, res["database"], "PULADA", res.get("error", ""), "", "", "", "", "", "", "", ""])
+                elif not res.get("success"):
+                    writer.writerow([idx, res["database"], "ROLLBACK/ERRO", res.get("error", ""), "", "", "", "", "", "", "", ""])
+                else:
                     div_count = res.get("divergent_count", 0)
-                    status_str = f"{div_count} registros com divergência" if div_count > 0 else "sem registros com divergências"
-
+                    status_str = f"COM DIVERGENCIA ({div_count})" if div_count > 0 else "SEM DIVERGENCIA"
                     for r in res["diff_rows"]:
                         writer.writerow([
-                            idx, res["database"], status_str, r["numero_pedido"], r["item"],
+                            idx, res["database"], status_str, "", r["numero_pedido"], r["item"],
                             r["registros_antes"], r["registros_depois"], r["diff_registros"],
                             r["qtd_antes"], r["qtd_depois"], r["diff_quantidade"]
                         ])
@@ -130,11 +141,11 @@ class ReportGenerator:
             item = {
                 "index": idx,
                 "database": res["database"],
-                "divergent_count": div_count,
-                "status_label": f"{div_count} registros com divergência" if div_count > 0 else "sem registros com divergências",
-                "success": res.get("success", False),
                 "skipped": res.get("skipped", False),
-                "error": res.get("error"),
+                "success": res.get("success", False),
+                "error_reason": res.get("error"),
+                "divergent_count": div_count,
+                "status_label": "PULADA" if res.get("skipped") else ("ROLLBACK" if not res.get("success") else (f"{div_count} divergências" if div_count > 0 else "sem divergências")),
                 "diff_rows": res.get("diff_rows", [])
             }
             payload.append(item)
@@ -163,10 +174,36 @@ class ReportGenerator:
 
         doc = SimpleDocTemplate(str(path), pagesize=letter)
         styles = getSampleStyleSheet()
-        story = [Paragraph("Relatório Resumo de Divergências de Deduplicação", styles['Title']), Spacer(1, 12)]
+        story = [Paragraph("Relatório Resumo de Deduplicação de Pedidos", styles['Title']), Spacer(1, 12)]
+
+        # 1. ÍNDICE NO PDF
+        story.append(Paragraph("Índice Geral de Bases de Dados", styles['Heading2']))
+        idx_data = [["Índice", "Base de Dados", "Status / Motivo"]]
 
         for idx, res in enumerate(execution_results, start=1):
-            if not res.get("success"):
+            if res.get("skipped"):
+                status_txt = f"PULADA: {res['error']}"
+            elif not res.get("success"):
+                status_txt = f"ROLLBACK: {res['error']}"
+            else:
+                div_count = res.get("divergent_count", 0)
+                status_txt = f"COM DIVERGÊNCIAS ({div_count})" if div_count > 0 else "SEM DIVERGÊNCIAS"
+
+            idx_data.append([str(idx), res["database"], status_txt])
+
+        idx_table = RLTable(idx_data, colWidths=[50, 150, 300])
+        idx_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.navy),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('FONTSIZE', (0, 0), (-1, -1), 8)
+        ]))
+        story.append(idx_table)
+        story.append(Spacer(1, 18))
+
+        # 2. DETALHAMENTO NO PDF
+        for idx, res in enumerate(execution_results, start=1):
+            if not res.get("success") or res.get("skipped"):
                 continue
 
             div_count = res.get("divergent_count", 0)
