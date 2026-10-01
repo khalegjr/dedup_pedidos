@@ -1,4 +1,14 @@
 import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Localiza a raiz do projeto (subindo de src/dedup_pedidos/config.py)
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+ENV_PATH = BASE_DIR / ".env"
+
+# Carrega as variáveis do arquivo .env
+load_dotenv(dotenv_path=ENV_PATH)
 
 DB_HOST = os.getenv("DB_HOST", "localhost")
 DB_PORT = int(os.getenv("DB_PORT", "5432"))

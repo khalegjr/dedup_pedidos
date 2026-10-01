@@ -37,13 +37,18 @@ def ask_file_path(default_path: str) -> str:
 def start(script_path: str = "script/deduplicacao_pedidos.sql"):
     console.print("[bold blue]=== Gerenciador de Deduplicação via Script SQL ===[/bold blue]\n")
 
+    # Extrai o host e a porta das configurações do servidor
+    server_host = SERVER_CONFIG.get("host") or SERVER_CONFIG.get("DB_HOST", "localhost")
+    server_port = SERVER_CONFIG.get("port") or SERVER_CONFIG.get("DB_PORT", 5432)
+    server_address = f"{server_host}:{server_port}"
+
     try:
         runner = ScriptRunner(SERVER_CONFIG, script_path=script_path)
     except Exception as e:
         console.print(f"[bold red]Erro ao carregar o script SQL:[/bold red] {e}")
         return
 
-    console.print("Listando bases de dados disponíveis no servidor...")
+    console.print(f"Listando bases de dados disponíveis no servidor [bold cyan]{server_address}[/bold cyan]...")
     databases = runner.list_target_databases(default_db=DEFAULT_DB)
 
     if not databases:
@@ -92,7 +97,7 @@ def start(script_path: str = "script/deduplicacao_pedidos.sql"):
     while True:
         report_choice = Prompt.ask(
             "\nEscolha a opção de relatório",
-            choices=["tela", "csv", "pdf", "json", "finalizar"],
+            choices=["tela", "csv", "pdf", "finalizar"],
             default="finalizar"
         )
 
@@ -108,8 +113,6 @@ def start(script_path: str = "script/deduplicacao_pedidos.sql"):
 
             if report_choice == "csv":
                 ReportGenerator.export_csv(results, user_path)
-            elif report_choice == "json":
-                ReportGenerator.export_json(results, user_path)
             elif report_choice == "pdf":
                 ReportGenerator.export_pdf(results, user_path)
 
