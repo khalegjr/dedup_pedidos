@@ -34,6 +34,16 @@ uv sync
 A aplicação busca as credenciais do servidor PostgreSQL a partir de variáveis de ambiente. Você pode exportá-las no seu terminal ou criar um arquivo .env na raiz do projeto:
 
 Exemplo de Configuração:
+Arquivo .env:
+
+```bash
+DB_HOST="localhost"
+DB_PORT="5432"
+DB_USER="postgres"
+DB_PASSWORD="sua_senha_aqui"
+DEFAULT_DB="postgres"
+```
+
 Linux / macOS (Terminal):
 
 ```bash

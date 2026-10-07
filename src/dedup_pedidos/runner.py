@@ -18,13 +18,12 @@ class ScriptRunner:
 
         sql = self.script_path.read_text(encoding="utf-8")
 
-        # Mantém todo o conteúdo do script SQL original
-        # Remove apenas comandos finais explícitos se existirem no arquivo,
-        # pois o Python controlará o encerramento da transação.
+        # Remove comandos manuais de transação do arquivo .sql,
+        # pois a biblioteca psycopg2 vai gerenciar BEGIN/COMMIT/ROLLBACK.
         sql_lines = []
         for line in sql.splitlines():
             stripped = line.strip().upper()
-            if stripped in ("COMMIT;", "ROLLBACK;"):
+            if stripped in ("BEGIN;", "COMMIT;", "ROLLBACK;"):
                 continue
             sql_lines.append(line)
 
@@ -46,27 +45,30 @@ class ScriptRunner:
             return []
 
     def check_has_duplicates(self, conn) -> bool:
-        """Verificação prévia e rápida se a base possui pedidos duplicados por (numero_pedido, filial)."""
+        """Verificação prévia e rápida se a base possui pedidos duplicados por (numero_pedido, filial e grupo_id)."""
         with conn.cursor() as cursor:
             cursor.execute("""
                 SELECT 1
                 FROM public.pedido
-                WHERE numero_pedido IS NOT NULL AND filial IS NOT NULL
-                GROUP BY numero_pedido, filial
+                WHERE numero_pedido IS NOT NULL
+                  AND filial IS NOT NULL
+                  AND grupo_id IS NOT NULL
+                GROUP BY numero_pedido, filial, grupo_id
                 HAVING COUNT(*) > 1
                 LIMIT 1;
             """)
             return cursor.fetchone() is not None
 
     def execute_db_script(self, db_name: str, is_simulation: bool) -> dict[str, Any]:
-        """Executa a checagem rápida e, se houver duplicatas, roda a rotina SQL."""
+        """Executa a checagem rápida e roda o script SQL garantindo o COMMIT/ROLLBACK correto."""
         result = {
             "database": db_name,
             "success": False,
             "skipped": False,
             "error": None,
             "diff_rows": [],
-            "has_diff_alert": False
+            "has_diff_alert": False,
+            "divergent_count": 0
         }
 
         try:
@@ -77,21 +79,22 @@ class ScriptRunner:
             return result
 
         try:
-            # Configura a conexão em autocommit para permitir que o script gerencie a transação
-            conn.autocommit = True
-
-            # 1. Checagem prévia de existência da tabela e duplicatas
+            # 1. Checagem se a tabela existe e possui duplicatas por (numero_pedido, filial, grupo_id)
             if not self.check_has_duplicates(conn):
+                conn.close()
                 result["skipped"] = True
-                result["error"] = "Nenhuma duplicidade encontrada (numero_pedido, filial)."
+                result["error"] = "Nenhuma duplicidade encontrada (numero_pedido, filial, grupo_id)."
                 return result
 
-            # 2. Execução do script SQL
+            # 2. Execução do script SQL na mesma transação
             with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute(self._raw_sql)
 
                 # Coleta os dados do relatório DIFF gerados na tabela temporária
-                cursor.execute("SELECT * FROM relatorio_diff_tmp ORDER BY numero_pedido, item;")
+                cursor.execute("""
+                    SELECT * FROM relatorio_diff_tmp
+                    ORDER BY filial, numero_pedido, grupo_id, item;
+                """)
                 rows = cursor.fetchall()
 
                 formatted_rows = []
@@ -107,32 +110,24 @@ class ScriptRunner:
                 result["diff_rows"] = formatted_rows
                 result["divergent_count"] = divergent_count
 
-                # Controle manual da transação iniciada pelo BEGIN do script SQL
-                if is_simulation:
-                    cursor.execute("ROLLBACK;")
-                else:
-                    cursor.execute("COMMIT;")
-
+            # 3. Finalização explícita da transação no banco de dados
+            if is_simulation:
+                conn.rollback()
+                result["success"] = True
+            else:
+                conn.commit()  # Garante a efetivação física das alterações no PostgreSQL!
                 result["success"] = True
 
-        except (errors.UndefinedTable, errors.UndefinedObject):
+        except (errors.UndefinedTable, errors.UndefinedColumn, errors.UndefinedObject) as e:
             if not conn.closed:
-                try:
-                    with conn.cursor() as cursor:
-                        cursor.execute("ROLLBACK;")
-                except Exception:
-                    pass
+                conn.rollback()
             result["skipped"] = True
-            result["error"] = "Tabelas necessárias (ex: public.pedido) não existem nesta base."
+            result["error"] = f"Tabela ou coluna necessária ausente nesta base: {e.pgerror or e}"
         except Exception as e:
             if not conn.closed:
-                try:
-                    with conn.cursor() as cursor:
-                        cursor.execute("ROLLBACK;")
-                except Exception:
-                    pass
+                conn.rollback()
             result["skipped"] = False
-            result["error"] = str(e)
+            result["error"] = f"Erro de execução SQL (Rollback efetuado): {e!s}"
         finally:
             if not conn.closed:
                 conn.close()
